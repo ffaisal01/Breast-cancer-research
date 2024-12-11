@@ -1,0 +1,178 @@
+---
+title: "RBIF120_Final_scRNA_Analysis"
+author: "Farwa Faisal"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Single-cell RNA-Seq Analysis - RBIF120
+
+
+## scRNA analysis of Breast cancer tissue for the significantly upregulated surface markers 
+```{r}
+# install.packages("Seurat")
+# install.packages("Matrix")
+# install.packages("data.table")
+library(Seurat)
+library(Matrix)
+library(data.table)
+library(R.utils)
+library(ggplot2)
+
+# Define the file paths
+matrix_file <- "C:/Users/ffais/OneDrive/Documents/rbif_120/scRNA_analysis/Allcells_raw_count_out/BrCa_Atlas_Count_out/matrix.mtx.gz"
+features_file <- "C:/Users/ffais/OneDrive/Documents/rbif_120/scRNA_analysis/Allcells_raw_count_out/BrCa_Atlas_Count_out/features.tsv.gz"
+barcodes_file <- "C:/Users/ffais/OneDrive/Documents/rbif_120/scRNA_analysis/Allcells_raw_count_out/BrCa_Atlas_Count_out/barcodes.tsv.gz"
+
+# Read the matrix file
+expression_matrix <- readMM(file = gzfile(matrix_file))
+
+ # Read the features and barcodes
+features <- fread(features_file, header = FALSE)
+barcodes <- fread(barcodes_file, header = FALSE)
+
+# Assign row and column names
+rownames(expression_matrix) <- features$V1
+colnames(expression_matrix) <- barcodes$V1
+
+dim(expression_matrix)
+
+# Convert to sparse matrix
+counts_sparse <- as(expression_matrix, "sparseMatrix")
+seurat_object <- CreateSeuratObject(counts = counts_sparse)
+
+rownames(seurat_object@assays$RNA@layers$counts) <- features$V1
+colnames(seurat_object@assays$RNA@layers$counts) <- barcodes$V1
+# seurat_object@assays$RNA@layers$counts[1:10,1:10]
+
+head(x = rownames(x = seurat_object))
+head(x = colnames(x = seurat_object))
+str(seurat_object)
+
+# Normalize the data to ensure proper scaling 
+ seurat_object <- NormalizeData(seurat_object, assay = "RNA")
+
+# GetAssayData(object = seurat_object, layer = 'counts')[1:10, 1:10]
+# head(x = seurat_object@meta.data[c('nCount_RNA', 'nFeature_RNA')])
+
+VlnPlot(object = seurat_object, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(object = seurat_object, features = c("nFeature_RNA"), group.by = c('orig.ident'))
+
+
+
+
+```
+
+
+
+
+
+
+```{r}
+
+# signifacntly upregulated cell surface genes from TCCGA and GEO analysis above
+TCGA.GEO.upreg.genes <- c("ABCC12","ATP1A3","ATP2A3","CACNA1H","CACNA1I","CACNG4","CACNG6","CDH15","CEACAM5", "CLIC3","CLIC6","COL5A1","COX7B2","DPEP1","ERBB2","FABP6","FGFR4","GRIN2D","HMMR","HPX","IL9R","KCNE4","KCNG3","KCNH2","KCNJ3","LCN12","LRRC15", "NCAM2","NUP210","P2RX2","PCSK9","PODXL2","RET","SEZ6L2","SLC12A5","SLC17A9", "SLC34A3","SLC39A4","SLC5A8","SLC8A2","TFR2","TNFRSF18","UNC5A")
+
+# upreg.genes.found <- which(toupper(rownames(seurat_object@assays$RNA@layers$counts)) %in% TCGA.GEO.upreg.genes)
+# 
+# n.expressed.genes <- Matrix::colSums(seurat_object@assays$RNA@layers$counts[upreg.genes.found, ] > 0)
+# seurat <- AddMetaData(object = seurat_object, metadata = n.expressed.genes, col.name = "n.expressed.genes")
+# VlnPlot(object = seurat, features = c("n.expressed.genes"), ncol = 1)
+
+
+
+# Create Seurat object: dense matrix
+# seurat_object <- CreateSeuratObject(counts = expression_matrix)
+
+
+# meta file
+meta.sc <- read.csv("C:/Users/ffais/OneDrive/Documents/rbif_120/scRNA_analysis/Whole_miniatlas_meta.csv", row.names = 1)
+meta.sc <- meta.sc[-1, ]
+head(meta.sc)
+# 
+seurat_object <- AddMetaData(seurat_object, metadata = meta.sc)
+#########VIOLIN PLOT by CELL-TYPE##################333
+
+# Define the gene of interest and identity
+genes.of.interest <- as.vector(TCGA.GEO.upreg.genes)
+Idents(seurat_object) <- seurat_object@meta.data$celltype_major
+
+
+# VlnPlot(object = seurat_object, features = c("ABCC12")) + ggtitle(paste("Violin plot for", gene, "by Cell Type"))
+
+
+# Ensure the RNA assay contains the gene of interest
+for (gene in genes.of.interest){
+if(gene %in% rownames(seurat_object@assays$RNA@layers$counts)) {
+  #using only gene data with non-zero values
+  gene_data <- FetchData(seurat_object, vars = gene)
+  non_zero_cells <- rownames(gene_data)[gene_data[, gene] > 0]
+  gene_subset <- subset(seurat_object, cells = non_zero_cells)
+
+  # Set identities using the celltype_major column
+  Idents(gene_subset) <- gene_subset@meta.data$celltype_major
+  
+  # Calculate cell type frequencies 
+  cell_type_counts <- table(Idents(gene_subset)) 
+  total_cells <- sum(cell_type_counts) 
+  cell_type_freq <- cell_type_counts / total_cells
+  
+  # Filter out cell types with less than 5% data points 
+  valid_cell_types <- names(cell_type_freq)[cell_type_freq >= 0.05] 
+  gene_subset <- subset(gene_subset, idents = valid_cell_types)
+  
+  if (length(valid_cell_types) > 0) { 
+    print(paste("Generating plot for", gene)) 
+    # Plot for each patient using VlnPlot, ensuring cell type is on the x-axis 
+    plot <- VlnPlot(object = gene_subset, features = c(gene)) + ggtitle(paste("Violin plot for", gene, "by Cell Type")) 
+    print(plot)
+    } else { 
+      message(paste("No cell types with sufficient data points for gene", gene)) 
+      } 
+  } else { 
+    message(paste("Gene", gene, "not found in the RNA assay."))
+}
+}
+
+
+
+# HKG from PLOS paper
+HKG <- c("ACTB", "B2M", "TUBB", "GAPDH", "TBP", "18S rRNA", "RPL13A", "G6PD", "SDHA", "HMBS", "HPRT1", "YWHAZ", "PPIA", "GUSB")
+
+for (gene in HKG){
+if(gene %in% rownames(seurat_object@assays$RNA@layers$counts)) {
+  #using only gene data with non-zero values
+  gene_data <- FetchData(seurat_object, vars = gene)
+  non_zero_cells <- rownames(gene_data)[gene_data[, gene] > 0]
+  gene_subset <- subset(seurat_object, cells = non_zero_cells)
+
+  # Set identities using the celltype_major column
+  Idents(gene_subset) <- gene_subset@meta.data$celltype_major
+  
+  # Calculate cell type frequencies 
+  cell_type_counts <- table(Idents(gene_subset)) 
+  total_cells <- sum(cell_type_counts) 
+  cell_type_freq <- cell_type_counts / total_cells
+  
+  # Filter out cell types with less than 5% data points 
+  valid_cell_types <- names(cell_type_freq)[cell_type_freq >= 0.05] 
+  gene_subset <- subset(gene_subset, idents = valid_cell_types)
+  
+  if (length(valid_cell_types) > 0) { 
+    print(paste("Generating plot for", gene)) 
+    # Plot for each patient using VlnPlot, ensuring cell type is on the x-axis 
+    plot <- VlnPlot(object = gene_subset, features = c(gene)) + ggtitle(paste("Violin plot for", gene, "by Cell Type")) 
+    print(plot)
+    } else { 
+      message(paste("No cell types with sufficient data points for gene", gene)) 
+      } 
+  } else { 
+    message(paste("Gene", gene, "not found in the RNA assay."))
+}
+}
+```
+
